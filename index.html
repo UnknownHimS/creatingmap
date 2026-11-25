@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Grid Map</title>
+<style>
+  body { font-family: sans-serif; margin: 16px; }
+  .bar { margin-bottom: 12px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .bar input[type=number] { width: 60px; }
+  #wrap { position: relative; width: 100%; touch-action: none; border: 1px solid #999; }
+  #grid { display: grid; gap: 1px; background: #999; position: absolute; inset: 0; }
+  .cell { background: #eee; }
+  .label {
+    position: absolute;
+    padding: 2px 6px;
+    font-weight: bold; font-size: 16px;
+    white-space: nowrap;
+    cursor: move; user-select: none;
+    text-shadow: 0 0 3px #fff;
+    z-index: 5;
+  }
+  .label[contenteditable="true"] { outline: 2px dashed #1f6feb; cursor: text; user-select: text; }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  Rows <input type="number" id="rows" min="1" max="60" value="10">
+  Columns <input type="number" id="cols" min="1" max="60" value="10">
+  <select id="orient">
+    <option value="landscape">Landscape</option>
+    <option value="portrait">Portrait</option>
+  </select>
+</div>
+<div class="bar">
+  Cell color <input type="color" id="color" value="#4f8fd6">
+  Text color <input type="color" id="tcolor" value="#000000">
+  <button onclick="addLabel()">+ Add text</button>
+  <button onclick="downloadMap()">Download PNG</button>
+  <button onclick="clearMap()">Clear</button>
+</div>
+<small>Tap a square to color it. Drag text to move it. Double-tap text to edit (empty it to delete). Your map saves automatically on this device.</small>
+
+<div id="wrap"><div id="grid"></div></div>
+
+<script>
+  var KEY = 'gridmap-v1';
+  var wrap = document.getElementById('wrap');
+  var grid = document.getElementById('grid');
+  var $ = function (id) { return document.getElementById(id); };
+
+  // state
+  var S = { rows: 10, cols: 10, orient: 'landscape', cells: {}, labels: [] };
+  // cells: { "row,col": "#hex" }   labels: [{x, y, text, color}]  (x,y = 0..1 of the map)
+
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
+  function load() {
+    try { var d = JSON.parse(localStorage.getItem(KEY)); if (d && d.cells) S = d; } catch (e) {}
+  }
+
+  function applyShape() {
+    wrap.style.aspectRatio = S.orient === 'portrait' ? '3 / 4' : '4 / 3';
+    wrap.style.maxWidth = S.orient === 'portrait' ? '520px' : '900px';
+  }
+
+  function drawGrid() {
+    grid.style.gridTemplateColumns = 'repeat(' + S.cols + ', 1fr)';
+    grid.style.gridTemplateRows = 'repeat(' + S.rows + ', 1fr)';
+    grid.innerHTML = '';
+    for (var r = 0; r < S.rows; r++) for (var c = 0; c < S.cols; c++) {
+      var d = document.createElement('div');
+      d.className = 'cell';
+      var k = r + ',' + c;
+      if (S.cells[k]) d.style.background = S.cells[k];
+      d.onclick = (function (k, d) { return function () {
+        S.cells[k] = $('color').value;
+        d.style.background = S.cells[k];
+        save();
+      }; })(k, d);
+      grid.appendChild(d);
+    }
+  }
+
+  function drawLabels() {
+    wrap.querySelectorAll('.label').forEach(function (e) { e.remove(); });
+    S.labels.forEach(makeLabel);
+  }
+
+  function makeLabel(L) {
+    var l = document.createElement('div');
+    l.className = 'label';
+    l.textContent = L.text;
+    l.style.color = L.color;
+    l.style.left = (L.x * 100) + '%';
+    l.style.top = (L.y * 100) + '%';
+    wrap.appendChild(l);
+
+    var drag = false, ox = 0, oy = 0;
+    l.addEventListener('pointerdown', function (e) {
+      if (l.isContentEditable) return;
+      drag = true;
+      var lr = l.getBoundingClientRect();
+      ox = e.clientX - lr.left; oy = e.clientY - lr.top;
+      l.setPointerCapture(e.pointerId);
+    });
+    l.addEventListener('pointermove', function (e) {
+      if (!drag) return;
+      var wr = wrap.getBoundingClientRect();
+      L.x = (e.clientX - ox - wr.left) / wr.width;
+      L.y = (e.clientY - oy - wr.top) / wr.height;
+      l.style.left = (L.x * 100) + '%';
+      l.style.top = (L.y * 100) + '%';
+    });
+    l.addEventListener('pointerup', function () { if (drag) { drag = false; save(); } });
+    l.addEventListener('dblclick', function () { l.contentEditable = 'true'; l.focus(); });
+    l.addEventListener('blur', function () {
+      l.contentEditable = 'false';
+      L.text = l.textContent.trim();
+      if (!L.text) { S.labels.splice(S.labels.indexOf(L), 1); l.remove(); }
+      save();
+    });
+  }
+
+  function addLabel() {
+    var L = { x: 0.4, y: 0.4, text: 'Name', color: $('tcolor').value };
+    S.labels.push(L); makeLabel(L); save();
+  }
+
+  function clearMap() {
+    if (!confirm('Clear the whole map?')) return;
+    S.cells = {}; S.labels = []; drawGrid(); drawLabels(); save();
+  }
+
+  function onShapeChange() {
+    S.rows = Math.max(1, Math.min(60, +$('rows').value || 1));
+    S.cols = Math.max(1, Math.min(60, +$('cols').value || 1));
+    S.orient = $('orient').value;
+    applyShape(); drawGrid(); save();
+  }
+  ['rows', 'cols', 'orient'].forEach(function (id) { $(id).onchange = onShapeChange; });
+
+  function downloadMap() {
+    var W = S.orient === 'portrait' ? 1200 : 1600;
+    var H = S.orient === 'portrait' ? 1600 : 1200;
+    var cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    var g = cv.getContext('2d');
+    var cw = W / S.cols, ch = H / S.rows;
+    for (var r = 0; r < S.rows; r++) for (var c = 0; c < S.cols; c++) {
+      g.fillStyle = S.cells[r + ',' + c] || '#eeeeee';
+      g.fillRect(c * cw, r * ch, cw, ch);
+    }
+    g.strokeStyle = '#999999'; g.lineWidth = 1;
+    for (var i = 0; i <= S.cols; i++) { g.beginPath(); g.moveTo(i * cw, 0); g.lineTo(i * cw, H); g.stroke(); }
+    for (var j = 0; j <= S.rows; j++) { g.beginPath(); g.moveTo(0, j * ch); g.lineTo(W, j * ch); g.stroke(); }
+    var k = W / wrap.clientWidth;               // scale screen px -> image px
+    g.font = 'bold ' + (16 * k) + 'px sans-serif';
+    g.textBaseline = 'top';
+    S.labels.forEach(function (L) {
+      var x = L.x * W + 6 * k, y = L.y * H + 2 * k + 1 * k;
+      g.lineWidth = 4 * k / 2; g.strokeStyle = 'rgba(255,255,255,0.85)'; g.lineJoin = 'round';
+      g.strokeText(L.text, x, y);
+      g.fillStyle = L.color; g.fillText(L.text, x, y);
+    });
+    cv.toBlob(function (b) {
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(b); a.download = 'my-grid-map.png';
+      document.body.appendChild(a); a.click(); a.remove();
+    });
+  }
+
+  load();
+  $('rows').value = S.rows; $('cols').value = S.cols; $('orient').value = S.orient;
+  applyShape(); drawGrid(); drawLabels();
+</script>
+
+</body>
+</html>
